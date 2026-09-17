@@ -18,6 +18,35 @@ export function articleUrl(title) {
   return `https://en.wikipedia.org/wiki/${encodeURIComponent(normalizeTitle(title).replace(/ /g, "_"))}`;
 }
 
+/**
+ * Accept either a plain title ("Sulla") or a full/partial Wikipedia URL
+ * ("https://en.wikipedia.org/wiki/Sulla", "en.m.wikipedia.org/wiki/Sulla",
+ * "/wiki/Sulla") and return the clean article title.
+ */
+export function parseTitleInput(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+  const inUrl = raw.match(/wikipedia\.org\/wiki\/([^?#]+)/i);
+  if (inUrl) return normalizeTitle(inUrl[1]);
+  const bareWiki = raw.match(/^\/?wiki\/([^?#]+)/i);
+  if (bareWiki) return normalizeTitle(bareWiki[1]);
+  return normalizeTitle(raw);
+}
+
+/**
+ * How many articles link TO this one (a strong proxy for how reachable it is
+ * in a race). Capped — we only need to know it clears a threshold.
+ */
+export async function getBacklinkCount(title, limit = 60) {
+  const url = `${API}?action=query&list=backlinks&bltitle=${encodeURIComponent(
+    title,
+  )}&blnamespace=0&blfilterredir=all&bllimit=${limit}&format=json&origin=*`;
+  const res = await fetch(url);
+  if (!res.ok) return 0;
+  const data = await res.json();
+  return (data.query?.backlinks || []).length;
+}
+
 export async function getRandomArticles(n = 2) {
   const url = `${API}?action=query&list=random&rnnamespace=0&rnlimit=${n}&format=json&origin=*`;
   const res = await fetch(url);
@@ -27,25 +56,91 @@ export async function getRandomArticles(n = 2) {
 }
 
 /**
- * Pick a random article AND confirm it actually loads with enough outgoing
- * links to be raceable. Returns the fully-fetched article so the caller can
- * reuse it without a second request.
+ * Pick a random article that is actually raceable and keep re-rolling until one
+ * qualifies. We insist on a well-connected "hub": lots of outgoing links (ways
+ * to leave) AND lots of incoming links (ways to be reached). Requiring this of
+ * BOTH endpoints is what makes random pairs land — obscure, isolated pages like
+ * "728 Naval Air Squadron" or a little-linked biography get re-rolled away.
+ * Destinations demand a bit more reachability. Returns the fetched article.
  */
-export async function getRandomValidatedArticle({ minLinks = 5, maxTries = 6 } = {}) {
+export async function getRandomValidatedArticle({
+  role = "start",
+  minLinks = 15,
+  minBacklinks = role === "dest" ? 60 : 40,
+  maxTries = 20,
+} = {}) {
   let lastError;
   for (let i = 0; i < maxTries; i++) {
-    let title;
     try {
-      [title] = await getRandomArticles(1);
+      const [title] = await getRandomArticles(1);
       const article = await getArticle(title);
-      if (article.links.length >= minLinks) return article;
+      if (article.links.length < minLinks) continue; // too few ways out
+      const backlinks = await getBacklinkCount(article.title, minBacklinks + 5);
+      if (backlinks < minBacklinks) continue; // too hard to reach / too obscure
+      return article;
     } catch (err) {
       lastError = err;
     }
   }
   throw new Error(
-    lastError ? `Couldn't fetch a random article: ${lastError.message}` : "Couldn't fetch a well-linked random article — try again.",
+    lastError
+      ? `Couldn't fetch a well-connected random article: ${lastError.message}`
+      : "Couldn't find a well-connected random article — try 🎲 again.",
   );
+}
+
+/**
+ * Produce a start/destination pair that is GUARANTEED to be connected: start
+ * from a random hub, then random-walk along real article links a few hops and
+ * use a hub we land on as the destination. Since we literally walked the path,
+ * a route exists — and because linked articles are topically related, the two
+ * ends share a thread the classifier can follow. This is what makes "Random
+ * both" reliably raceable instead of pairing two unrelated islands.
+ */
+export async function getReachableRandomPair({
+  minHops = 3,
+  maxHops = 6,
+  minBacklinks = 50,
+} = {}) {
+  const start = await getRandomValidatedArticle({ role: "start" });
+  const visited = new Set([titleKey(start.title)]);
+  let current = start;
+  let dest = null;
+  const target = minHops + Math.floor(Math.random() * (maxHops - minHops + 1));
+
+  for (let hop = 1; hop <= maxHops; hop++) {
+    const options = current.links.filter((l) => !visited.has(titleKey(l.title)));
+    let next = null;
+    for (let attempt = 0; attempt < 6 && options.length; attempt++) {
+      const idx = Math.floor(Math.random() * options.length);
+      const [pick] = options.splice(idx, 1);
+      try {
+        const article = await getArticle(pick.title);
+        if (article.links.length >= 12 && !visited.has(titleKey(article.title))) {
+          next = article;
+          break;
+        }
+      } catch {
+        /* skip unreachable link, try another */
+      }
+    }
+    if (!next) break;
+    visited.add(titleKey(next.title));
+    current = next;
+    if (hop >= target) {
+      const backlinks = await getBacklinkCount(current.title, minBacklinks + 5);
+      if (backlinks >= minBacklinks) {
+        dest = current;
+        break;
+      }
+    }
+  }
+
+  if (!dest) dest = current;
+  if (titleKey(dest.title) === titleKey(start.title)) {
+    throw new Error("Random walk didn't move — try 🎲 again.");
+  }
+  return { start, dest };
 }
 
 const SKIP_HREF =

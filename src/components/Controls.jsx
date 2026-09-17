@@ -48,6 +48,7 @@ export default function Controls({
               onChange={(e) => setStart(e.target.value)}
               disabled={running || startBusy}
               spellCheck={false}
+              placeholder="Title or Wikipedia URL"
             />
             <button
               type="button"
@@ -73,6 +74,7 @@ export default function Controls({
               onChange={(e) => setDest(e.target.value)}
               disabled={running || destBusy}
               spellCheck={false}
+              placeholder="Title or Wikipedia URL"
             />
             <button
               type="button"

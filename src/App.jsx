@@ -7,7 +7,9 @@ import Sponsors from "./components/Sponsors.jsx";
 import {
   getArticle,
   getRandomValidatedArticle,
+  getReachableRandomPair,
   getSummary,
+  parseTitleInput,
   titleKey,
 } from "./lib/wikipedia.js";
 import { classify } from "./lib/jev.js";
@@ -56,7 +58,9 @@ export default function App() {
     const setVal = which === "start" ? setStart : setDest;
     setBusy(true);
     try {
-      const found = await getRandomValidatedArticle();
+      const found = await getRandomValidatedArticle({
+        role: which === "dest" ? "dest" : "start",
+      });
       setVal(found.title);
     } catch (err) {
       setError(String(err.message || err));
@@ -70,10 +74,8 @@ export default function App() {
     setStartBusy(true);
     setDestBusy(true);
     try {
-      const [a, b] = await Promise.all([
-        getRandomValidatedArticle(),
-        getRandomValidatedArticle(),
-      ]);
+      // A random walk from a random hub — guarantees the pair is connected.
+      const { start: a, dest: b } = await getReachableRandomPair();
       setStart(a.title);
       setDest(b.title);
     } catch (err) {
@@ -98,6 +100,17 @@ export default function App() {
       return;
     }
 
+    // Fields accept a plain title OR a Wikipedia URL — normalize both to titles
+    // and reflect the clean title back into the inputs.
+    const startTitle = parseTitleInput(start);
+    const destTitle = parseTitleInput(dest);
+    if (!startTitle || !destTitle) {
+      setError("Couldn't read those as Wikipedia articles.");
+      return;
+    }
+    if (startTitle !== start) setStart(startTitle);
+    if (destTitle !== dest) setDest(destTitle);
+
     stopRef.current = false;
     setPhase("running");
     setError("");
@@ -107,7 +120,7 @@ export default function App() {
     setLatencies([]);
     setElapsedMs(0);
 
-    const goal = `find ${dest} starting with ${start}`;
+    const goal = `find ${destTitle} starting with ${startTitle}`;
     const visited = new Set(); // canonical titles of pages we've actually landed on
     const tried = new Set(); // link targets we've already attempted (beats redirects)
     const trail = []; // stack of articles for backtracking
@@ -117,21 +130,21 @@ export default function App() {
       // Resolve the destination's canonical title up front so redirects still
       // count as a win (e.g. "POM Wonderful" → its real article title), and
       // grab a short summary so Jev knows what the destination actually is.
-      let destKey = titleKey(dest);
+      let destKey = titleKey(destTitle);
       let destinationSummary = "";
       try {
         const [destArticle, summary] = await Promise.all([
-          getArticle(dest),
-          getSummary(dest).catch(() => ""),
+          getArticle(destTitle),
+          getSummary(destTitle).catch(() => ""),
         ]);
         destKey = titleKey(destArticle.title);
         destinationSummary = summary;
         if (summary) pushLog({ kind: "load", text: `Destination: ${summary.slice(0, 90)}…` });
       } catch {
-        pushLog({ kind: "warn", text: `Couldn't pre-load "${dest}" — matching on name.` });
+        pushLog({ kind: "warn", text: `Couldn't pre-load "${destTitle}" — matching on name.` });
       }
 
-      let current = await getArticle(start);
+      let current = await getArticle(startTitle);
       setArticle(current);
       setPath([current.title]);
       visited.add(titleKey(current.title));
@@ -182,7 +195,7 @@ export default function App() {
         const result = await classify({
           apiKey: apiKey.trim(),
           goal,
-          destination: dest,
+          destination: destTitle,
           destinationSummary,
           current,
           links: remaining,
