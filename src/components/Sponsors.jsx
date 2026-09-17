@@ -6,7 +6,7 @@ export default function Sponsors() {
       <div className="blooio-card">
         <div className="blooio-head">
           <img
-            src="https://blooio.com/logo.png"
+            src="https://bucket.blooio.com/assets/Logo/LogoSQ-sm.png"
             alt="Blooio"
             className="blooio-logo"
             width="40"
