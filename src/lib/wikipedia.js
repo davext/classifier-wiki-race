@@ -26,6 +26,28 @@ export async function getRandomArticles(n = 2) {
   return (data.query?.random || []).map((r) => r.title);
 }
 
+/**
+ * Pick a random article AND confirm it actually loads with enough outgoing
+ * links to be raceable. Returns the fully-fetched article so the caller can
+ * reuse it without a second request.
+ */
+export async function getRandomValidatedArticle({ minLinks = 5, maxTries = 6 } = {}) {
+  let lastError;
+  for (let i = 0; i < maxTries; i++) {
+    let title;
+    try {
+      [title] = await getRandomArticles(1);
+      const article = await getArticle(title);
+      if (article.links.length >= minLinks) return article;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw new Error(
+    lastError ? `Couldn't fetch a random article: ${lastError.message}` : "Couldn't fetch a well-linked random article — try again.",
+  );
+}
+
 const SKIP_HREF =
   /\/wiki\/(File|Image|Help|Wikipedia|Template|Talk|Category|Portal|Module|Special|Draft|Book|MediaWiki|TimedText|Template_talk|User):|redlink=1|action=edit/i;
 

@@ -4,11 +4,16 @@ import Controls from "./components/Controls.jsx";
 import BrowserPane from "./components/BrowserPane.jsx";
 import JevPanel from "./components/JevPanel.jsx";
 import Sponsors from "./components/Sponsors.jsx";
-import { getArticle, getRandomArticles, titleKey } from "./lib/wikipedia.js";
+import {
+  getArticle,
+  getRandomValidatedArticle,
+  titleKey,
+} from "./lib/wikipedia.js";
+import { hopScore } from "./lib/hop.js";
 import { classify } from "./lib/jev.js";
 
-const MAX_STEPS = 30;
-const WATCH_DELAY_MS = 850;
+const MAX_STEPS = 45;
+const WATCH_DELAY_MS = 750;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -26,6 +31,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [latencies, setLatencies] = useState([]);
   const [elapsedMs, setElapsedMs] = useState(0);
+  const [startBusy, setStartBusy] = useState(false);
+  const [destBusy, setDestBusy] = useState(false);
 
   const stopRef = useRef(false);
 
@@ -42,14 +49,37 @@ export default function App() {
     setLog((prev) => [...prev, { ...entry, at: Date.now() }]);
   }, []);
 
-  const randomize = useCallback(async () => {
+  const randomizeField = useCallback(async (which) => {
     setError("");
+    const setBusy = which === "start" ? setStartBusy : setDestBusy;
+    const setVal = which === "start" ? setStart : setDest;
+    setBusy(true);
     try {
-      const [a, b] = await getRandomArticles(2);
-      setStart(a);
-      setDest(b);
+      const found = await getRandomValidatedArticle();
+      setVal(found.title);
     } catch (err) {
       setError(String(err.message || err));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const randomizeBoth = useCallback(async () => {
+    setError("");
+    setStartBusy(true);
+    setDestBusy(true);
+    try {
+      const [a, b] = await Promise.all([
+        getRandomValidatedArticle(),
+        getRandomValidatedArticle(),
+      ]);
+      setStart(a.title);
+      setDest(b.title);
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setStartBusy(false);
+      setDestBusy(false);
     }
   }, []);
 
@@ -77,20 +107,31 @@ export default function App() {
     setElapsedMs(0);
 
     const goal = `find ${dest} starting with ${start}`;
-    const destKey = titleKey(dest);
-    const visited = [];
+    const visited = new Set();
+    const trail = []; // stack of articles for backtracking
     const t0 = performance.now();
 
     try {
+      // Resolve the destination's canonical title up front so redirects still
+      // count as a win (e.g. "POM Wonderful" → its real article title).
+      let destKey = titleKey(dest);
+      try {
+        const destArticle = await getArticle(dest);
+        destKey = titleKey(destArticle.title);
+      } catch {
+        pushLog({ kind: "warn", text: `Couldn't pre-load "${dest}" — matching on name.` });
+      }
+
       let current = await getArticle(start);
       setArticle(current);
       setPath([current.title]);
-      visited.push(titleKey(current.title));
+      visited.add(titleKey(current.title));
+      trail.push(current);
       pushLog({ kind: "load", text: `Loaded ${current.title}` });
 
       if (titleKey(current.title) === destKey) {
         setPhase("won");
-        pushLog({ kind: "win", text: `Start is already the destination.` });
+        pushLog({ kind: "win", text: "Start is already the destination." });
         return;
       }
 
@@ -101,13 +142,22 @@ export default function App() {
           return;
         }
 
-        const remaining = current.links.filter(
-          (l) => !visited.includes(titleKey(l.title)),
-        );
+        const remaining = current.links.filter((l) => !visited.has(titleKey(l.title)));
+
+        // Dead end → backtrack to the most recent article that still has options.
         if (!remaining.length) {
-          setPhase("stuck");
-          pushLog({ kind: "stuck", text: "No unused links to hop to." });
-          return;
+          trail.pop();
+          if (!trail.length) {
+            setPhase("stuck");
+            pushLog({ kind: "stuck", text: "Backtracked to the start — no path found." });
+            return;
+          }
+          current = trail[trail.length - 1];
+          setArticle(current);
+          setHighlight(null);
+          pushLog({ kind: "back", text: `↩ Backtracked to ${current.title}` });
+          await sleep(WATCH_DELAY_MS);
+          continue;
         }
 
         const result = await classify({
@@ -116,38 +166,58 @@ export default function App() {
           destination: dest,
           current,
           links: remaining,
-          visited,
+          visited: [...visited],
         });
 
         setDecision(result);
         setLatencies((prev) => [...prev, result.latencyMs]);
         setElapsedMs(Math.round(performance.now() - t0));
-        setHighlight(result.chosen?.title || null);
+
+        // Jev is the decider. If it clicks, take that link. If it says DONE at
+        // the destination we win; otherwise (BLOCKED / no pick) we don't give
+        // up while unused links exist — we take the strongest bridge instead.
+        let chosen = result.chosen;
+        let forced = false;
+
+        if (result.operation === "DONE" && titleKey(current.title) === destKey) {
+          setHighlight(null);
+          setPhase("won");
+          pushLog({ kind: "win", text: `Reached ${current.title}!` });
+          return;
+        }
+
+        if (!chosen) {
+          chosen = [...remaining].sort((a, b) => hopScore(b, dest) - hopScore(a, dest))[0];
+          forced = Boolean(chosen);
+        }
+
+        setHighlight(chosen ? chosen.title : null);
         pushLog({
           kind: "decision",
-          text: `${result.operation}${result.chosen ? ` → ${result.chosen.name}` : ""}`,
+          text: `${result.operation}${chosen ? ` → ${chosen.name}` : ""}${forced ? " (bridge)" : ""}`,
           latencyMs: result.latencyMs,
         });
 
         await sleep(WATCH_DELAY_MS);
 
-        if (result.operation === "DONE") {
-          if (titleKey(current.title) === destKey) {
-            setPhase("won");
+        if (!chosen) {
+          // Nothing to click and Jev didn't help — backtrack.
+          trail.pop();
+          if (!trail.length) {
+            setPhase("stuck");
+            pushLog({ kind: "stuck", text: "No link to take and nowhere to backtrack." });
             return;
           }
-          // Jev thinks it's done but the title doesn't match — keep hopping if it can.
+          current = trail[trail.length - 1];
+          setArticle(current);
+          setHighlight(null);
+          continue;
         }
 
-        if (!result.chosen) {
-          setPhase("stuck");
-          pushLog({ kind: "stuck", text: "Jev could not pick a link." });
-          return;
-        }
-
-        const next = await getArticle(result.chosen.title);
-        visited.push(titleKey(next.title));
+        const next = await getArticle(chosen.title);
+        visited.add(titleKey(next.title));
         current = next;
+        trail.push(next);
         setArticle(next);
         setPath((prev) => [...prev, next.title]);
         setHighlight(null);
@@ -183,9 +253,13 @@ export default function App() {
         dest={dest}
         setDest={setDest}
         running={running}
+        startBusy={startBusy}
+        destBusy={destBusy}
         onStart={runRace}
         onStop={stop}
-        onRandom={randomize}
+        onRandom={randomizeBoth}
+        onRandomStart={() => randomizeField("start")}
+        onRandomDest={() => randomizeField("dest")}
       />
 
       {error ? <div className="banner error">{error}</div> : null}
@@ -214,7 +288,10 @@ function PhaseBanner({ phase, start, dest, stats }) {
   const map = {
     running: { cls: "running", text: `Racing "${start}" → "${dest}"…` },
     won: { cls: "won", text: `🏁 Reached "${dest}" in ${stats.hops} hops · ${stats.elapsedMs} ms` },
-    stuck: { cls: "warn", text: `Stuck before reaching "${dest}". Try another target or Random.` },
+    stuck: {
+      cls: "warn",
+      text: `Couldn't reach "${dest}" within ${45} steps. Try 🎲 for a better-connected target.`,
+    },
     stopped: { cls: "warn", text: `Stopped after ${stats.hops} hops.` },
     error: { cls: "error", text: `Something went wrong.` },
   };

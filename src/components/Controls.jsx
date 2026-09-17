@@ -6,9 +6,13 @@ export default function Controls({
   dest,
   setDest,
   running,
+  startBusy,
+  destBusy,
   onStart,
   onStop,
   onRandom,
+  onRandomStart,
+  onRandomDest,
 }) {
   return (
     <section className="controls">
@@ -17,7 +21,7 @@ export default function Controls({
         <input
           id="apiKey"
           type="password"
-          placeholder="sk-…  (kept in memory only — never stored)"
+          placeholder="apikey_…  (kept in memory only — never stored)"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           autoComplete="off"
@@ -35,31 +39,60 @@ export default function Controls({
       <div className="race-row">
         <div className="field">
           <label htmlFor="start">Start article</label>
-          <input
-            id="start"
-            value={start}
-            onChange={(e) => setStart(e.target.value)}
-            disabled={running}
-            spellCheck={false}
-          />
+          <div className="input-wrap">
+            <input
+              id="start"
+              value={start}
+              onChange={(e) => setStart(e.target.value)}
+              disabled={running || startBusy}
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="dice"
+              onClick={onRandomStart}
+              disabled={running || startBusy}
+              title="Random valid start article"
+              aria-label="Random start article"
+            >
+              {startBusy ? "…" : "🎲"}
+            </button>
+          </div>
         </div>
 
         <span className="arrow" aria-hidden="true">→</span>
 
         <div className="field">
           <label htmlFor="dest">Destination article</label>
-          <input
-            id="dest"
-            value={dest}
-            onChange={(e) => setDest(e.target.value)}
-            disabled={running}
-            spellCheck={false}
-          />
+          <div className="input-wrap">
+            <input
+              id="dest"
+              value={dest}
+              onChange={(e) => setDest(e.target.value)}
+              disabled={running || destBusy}
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="dice"
+              onClick={onRandomDest}
+              disabled={running || destBusy}
+              title="Random valid destination article"
+              aria-label="Random destination article"
+            >
+              {destBusy ? "…" : "🎲"}
+            </button>
+          </div>
         </div>
 
         <div className="buttons">
-          <button type="button" className="btn ghost" onClick={onRandom} disabled={running}>
-            🎲 Random
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={onRandom}
+            disabled={running || startBusy || destBusy}
+          >
+            🎲 Random both
           </button>
           {running ? (
             <button type="button" className="btn danger" onClick={onStop}>
