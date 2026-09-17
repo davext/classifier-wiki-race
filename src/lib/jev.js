@@ -1,4 +1,4 @@
-import { orderCandidates } from "./hop.js";
+import { destinationKeywords, orderCandidates } from "./hop.js";
 
 // Instructions are the only free text that reaches the model. IDs and elements
 // stay structured. This mirrors the fast-browser "hop mode" rules.
@@ -29,7 +29,8 @@ export async function classify({
   links,
   visited,
 }) {
-  const candidates = orderCandidates(links, destination, 24);
+  const keywords = destinationKeywords(destination, destinationSummary);
+  const candidates = orderCandidates(links, keywords, 28);
 
   const targetCriteria = {};
   for (const link of candidates) {
