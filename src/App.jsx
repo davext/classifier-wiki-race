@@ -107,7 +107,8 @@ export default function App() {
     setElapsedMs(0);
 
     const goal = `find ${dest} starting with ${start}`;
-    const visited = new Set();
+    const visited = new Set(); // canonical titles of pages we've actually landed on
+    const tried = new Set(); // link targets we've already attempted (beats redirects)
     const trail = []; // stack of articles for backtracking
     const t0 = performance.now();
 
@@ -135,6 +136,16 @@ export default function App() {
         return;
       }
 
+      const backtrack = (reason) => {
+        trail.pop();
+        if (!trail.length) return false;
+        current = trail[trail.length - 1];
+        setArticle(current);
+        setHighlight(null);
+        if (reason) pushLog({ kind: "back", text: reason });
+        return true;
+      };
+
       for (let step = 1; step <= MAX_STEPS; step++) {
         if (stopRef.current) {
           setPhase("stopped");
@@ -142,20 +153,20 @@ export default function App() {
           return;
         }
 
-        const remaining = current.links.filter((l) => !visited.has(titleKey(l.title)));
+        // Candidates exclude pages already landed on AND links already attempted
+        // (a redirect can point a differently-named link back to a seen page).
+        const remaining = current.links.filter((l) => {
+          const k = titleKey(l.title);
+          return !visited.has(k) && !tried.has(k);
+        });
 
-        // Dead end → backtrack to the most recent article that still has options.
+        // Dead end → backtrack to the most recent article with options left.
         if (!remaining.length) {
-          trail.pop();
-          if (!trail.length) {
+          if (!backtrack(`↩ Backtracked to previous article`)) {
             setPhase("stuck");
-            pushLog({ kind: "stuck", text: "Backtracked to the start — no path found." });
+            pushLog({ kind: "stuck", text: "Explored every branch — no path found." });
             return;
           }
-          current = trail[trail.length - 1];
-          setArticle(current);
-          setHighlight(null);
-          pushLog({ kind: "back", text: `↩ Backtracked to ${current.title}` });
           await sleep(WATCH_DELAY_MS);
           continue;
         }
@@ -173,12 +184,6 @@ export default function App() {
         setLatencies((prev) => [...prev, result.latencyMs]);
         setElapsedMs(Math.round(performance.now() - t0));
 
-        // Jev is the decider. If it clicks, take that link. If it says DONE at
-        // the destination we win; otherwise (BLOCKED / no pick) we don't give
-        // up while unused links exist — we take the strongest bridge instead.
-        let chosen = result.chosen;
-        let forced = false;
-
         if (result.operation === "DONE" && titleKey(current.title) === destKey) {
           setHighlight(null);
           setPhase("won");
@@ -186,48 +191,81 @@ export default function App() {
           return;
         }
 
+        // Jev decides. If it won't pick, only force a link that actually shares
+        // a destination keyword; otherwise backtrack instead of wandering.
+        let chosen = result.chosen;
+        let forced = false;
         if (!chosen) {
-          chosen = [...remaining].sort((a, b) => hopScore(b, dest) - hopScore(a, dest))[0];
-          forced = Boolean(chosen);
+          const best = [...remaining].sort((a, b) => hopScore(b, dest) - hopScore(a, dest))[0];
+          if (best && hopScore(best, dest) > 0) {
+            chosen = best;
+            forced = true;
+          }
         }
 
-        setHighlight(chosen ? chosen.title : null);
+        if (!chosen) {
+          pushLog({
+            kind: "decision",
+            text: `${result.operation} — no lead here`,
+            latencyMs: result.latencyMs,
+          });
+          await sleep(WATCH_DELAY_MS);
+          if (!backtrack(`↩ No lead — backtracked`)) {
+            setPhase("stuck");
+            pushLog({ kind: "stuck", text: "No lead and nowhere to backtrack." });
+            return;
+          }
+          continue;
+        }
+
+        // Mark the link tried BEFORE navigating so a redirect/loop can't make us
+        // click it again.
+        tried.add(titleKey(chosen.title));
+        setHighlight(chosen.title);
         pushLog({
           kind: "decision",
-          text: `${result.operation}${chosen ? ` → ${chosen.name}` : ""}${forced ? " (bridge)" : ""}`,
+          text: `${result.operation} → ${chosen.name}${forced ? " (bridge)" : ""}`,
           latencyMs: result.latencyMs,
         });
 
         await sleep(WATCH_DELAY_MS);
 
-        if (!chosen) {
-          // Nothing to click and Jev didn't help — backtrack.
-          trail.pop();
-          if (!trail.length) {
-            setPhase("stuck");
-            pushLog({ kind: "stuck", text: "No link to take and nowhere to backtrack." });
-            return;
-          }
-          current = trail[trail.length - 1];
-          setArticle(current);
+        let next;
+        try {
+          next = await getArticle(chosen.title);
+        } catch (err) {
+          pushLog({ kind: "warn", text: `Skipped ${chosen.name} — ${err.message}` });
+          continue;
+        }
+        const nextKey = titleKey(next.title);
+        tried.add(nextKey);
+
+        if (nextKey === destKey) {
+          visited.add(nextKey);
+          setArticle(next);
+          setPath((prev) => [...prev, next.title]);
           setHighlight(null);
+          setElapsedMs(Math.round(performance.now() - t0));
+          setPhase("won");
+          pushLog({ kind: "win", text: `Reached ${next.title}!` });
+          return;
+        }
+
+        // The link redirected to / led back to a page we've already seen —
+        // don't advance or loop; just try another link from here.
+        if (visited.has(nextKey)) {
+          setHighlight(null);
+          pushLog({ kind: "back", text: `↩ ${chosen.name} loops back to ${next.title}` });
           continue;
         }
 
-        const next = await getArticle(chosen.title);
-        visited.add(titleKey(next.title));
+        visited.add(nextKey);
         current = next;
         trail.push(next);
         setArticle(next);
         setPath((prev) => [...prev, next.title]);
         setHighlight(null);
         setElapsedMs(Math.round(performance.now() - t0));
-
-        if (titleKey(next.title) === destKey) {
-          setPhase("won");
-          pushLog({ kind: "win", text: `Reached ${next.title}!` });
-          return;
-        }
       }
 
       setPhase("stuck");
