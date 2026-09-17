@@ -1,0 +1,24 @@
+{
+  "name": "classifier-wiki-race",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Watch TypeSafe's Jev classifier race across Wikipedia in real time. Built by David Harvey.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "vite build && wrangler deploy",
+    "cf-dev": "vite build && wrangler dev"
+  },
+  "dependencies": {
+    "hono": "^4.6.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.8",
+    "wrangler": "^3.80.0"
+  }
+}
