@@ -1,4 +1,6 @@
+# pnpm blocks dependency build scripts by default. esbuild (bundler) and
+# workerd (Cloudflare runtime) need their postinstall to fetch native binaries,
+# so allow them explicitly — otherwise `vite build` / `wrangler` can't run.
 allowBuilds:
-  esbuild: set this to true or false
-  sharp: set this to true or false
-  workerd: set this to true or false
+  esbuild: true
+  workerd: true
