@@ -7,12 +7,12 @@ import Sponsors from "./components/Sponsors.jsx";
 import {
   getArticle,
   getRandomValidatedArticle,
+  getSummary,
   titleKey,
 } from "./lib/wikipedia.js";
-import { hopScore } from "./lib/hop.js";
 import { classify } from "./lib/jev.js";
 
-const MAX_STEPS = 45;
+const DEFAULT_STEPS = 45;
 const WATCH_DELAY_MS = 750;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -21,6 +21,7 @@ export default function App() {
   const [apiKey, setApiKey] = useState("");
   const [start, setStart] = useState("Apple Inc.");
   const [dest, setDest] = useState("Sulla");
+  const [maxSteps, setMaxSteps] = useState(DEFAULT_STEPS);
 
   const [phase, setPhase] = useState("idle"); // idle | running | won | stuck | stopped | error
   const [article, setArticle] = useState(null);
@@ -114,11 +115,18 @@ export default function App() {
 
     try {
       // Resolve the destination's canonical title up front so redirects still
-      // count as a win (e.g. "POM Wonderful" → its real article title).
+      // count as a win (e.g. "POM Wonderful" → its real article title), and
+      // grab a short summary so Jev knows what the destination actually is.
       let destKey = titleKey(dest);
+      let destinationSummary = "";
       try {
-        const destArticle = await getArticle(dest);
+        const [destArticle, summary] = await Promise.all([
+          getArticle(dest),
+          getSummary(dest).catch(() => ""),
+        ]);
         destKey = titleKey(destArticle.title);
+        destinationSummary = summary;
+        if (summary) pushLog({ kind: "load", text: `Destination: ${summary.slice(0, 90)}…` });
       } catch {
         pushLog({ kind: "warn", text: `Couldn't pre-load "${dest}" — matching on name.` });
       }
@@ -146,7 +154,7 @@ export default function App() {
         return true;
       };
 
-      for (let step = 1; step <= MAX_STEPS; step++) {
+      for (let step = 1; step <= maxSteps; step++) {
         if (stopRef.current) {
           setPhase("stopped");
           pushLog({ kind: "stop", text: "Stopped." });
@@ -175,6 +183,7 @@ export default function App() {
           apiKey: apiKey.trim(),
           goal,
           destination: dest,
+          destinationSummary,
           current,
           links: remaining,
           visited: [...visited],
@@ -191,16 +200,14 @@ export default function App() {
           return;
         }
 
-        // Jev decides. If it won't pick, only force a link that actually shares
-        // a destination keyword; otherwise backtrack instead of wandering.
+        // Jev decides. If it declines to CLICK but still ranks a link with real
+        // confidence, follow Jev's own top pick; otherwise backtrack rather than
+        // wander into loosely-related pages.
         let chosen = result.chosen;
         let forced = false;
-        if (!chosen) {
-          const best = [...remaining].sort((a, b) => hopScore(b, dest) - hopScore(a, dest))[0];
-          if (best && hopScore(best, dest) > 0) {
-            chosen = best;
-            forced = true;
-          }
+        if (!chosen && result.bestTarget && result.bestTargetProb >= 0.15) {
+          chosen = result.bestTarget;
+          forced = true;
         }
 
         if (!chosen) {
@@ -269,13 +276,13 @@ export default function App() {
       }
 
       setPhase("stuck");
-      pushLog({ kind: "stuck", text: `Hit ${MAX_STEPS} steps without arriving.` });
+      pushLog({ kind: "stuck", text: `Hit ${maxSteps} steps without arriving.` });
     } catch (err) {
       setError(String(err.message || err));
       setPhase("error");
       pushLog({ kind: "error", text: String(err.message || err) });
     }
-  }, [apiKey, start, dest, pushLog]);
+  }, [apiKey, start, dest, maxSteps, pushLog]);
 
   const running = phase === "running";
 
@@ -290,6 +297,8 @@ export default function App() {
         setStart={setStart}
         dest={dest}
         setDest={setDest}
+        maxSteps={maxSteps}
+        setMaxSteps={setMaxSteps}
         running={running}
         startBusy={startBusy}
         destBusy={destBusy}
@@ -302,7 +311,7 @@ export default function App() {
 
       {error ? <div className="banner error">{error}</div> : null}
 
-      <PhaseBanner phase={phase} start={start} dest={dest} stats={stats} />
+      <PhaseBanner phase={phase} start={start} dest={dest} stats={stats} maxSteps={maxSteps} />
 
       <main className="stage">
         <BrowserPane article={article} highlightTitle={highlight} phase={phase} />
@@ -321,14 +330,14 @@ export default function App() {
   );
 }
 
-function PhaseBanner({ phase, start, dest, stats }) {
+function PhaseBanner({ phase, start, dest, stats, maxSteps }) {
   if (phase === "idle") return null;
   const map = {
     running: { cls: "running", text: `Racing "${start}" → "${dest}"…` },
     won: { cls: "won", text: `🏁 Reached "${dest}" in ${stats.hops} hops · ${stats.elapsedMs} ms` },
     stuck: {
       cls: "warn",
-      text: `Couldn't reach "${dest}" within ${45} steps. Try 🎲 for a better-connected target.`,
+      text: `Couldn't reach "${dest}" within ${maxSteps} steps. Raise the step limit or try 🎲 for a better-connected target.`,
     },
     stopped: { cls: "warn", text: `Stopped after ${stats.hops} hops.` },
     error: { cls: "error", text: `Something went wrong.` },

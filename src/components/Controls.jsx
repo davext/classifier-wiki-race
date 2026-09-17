@@ -5,6 +5,8 @@ export default function Controls({
   setStart,
   dest,
   setDest,
+  maxSteps,
+  setMaxSteps,
   running,
   startBusy,
   destBusy,
@@ -83,6 +85,20 @@ export default function Controls({
               {destBusy ? "…" : "🎲"}
             </button>
           </div>
+        </div>
+
+        <div className="field steps-field">
+          <label htmlFor="steps">Max steps · {maxSteps}</label>
+          <input
+            id="steps"
+            type="range"
+            min="5"
+            max="100"
+            step="5"
+            value={maxSteps}
+            onChange={(e) => setMaxSteps(Number(e.target.value))}
+            disabled={running}
+          />
         </div>
 
         <div className="buttons">

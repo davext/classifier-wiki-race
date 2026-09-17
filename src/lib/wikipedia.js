@@ -52,6 +52,24 @@ const SKIP_HREF =
   /\/wiki\/(File|Image|Help|Wikipedia|Template|Talk|Category|Portal|Module|Special|Draft|Book|MediaWiki|TimedText|Template_talk|User):|redlink=1|action=edit/i;
 
 /**
+ * Short intro extract for an article — used to ground the classifier on what
+ * the destination actually is (its place, subject, category).
+ */
+export async function getSummary(title, maxChars = 320) {
+  const url = `${API}?action=query&prop=extracts&exintro=1&explaintext=1&redirects=1&format=json&origin=*&titles=${encodeURIComponent(
+    title,
+  )}`;
+  const res = await fetch(url);
+  if (!res.ok) return "";
+  const data = await res.json();
+  const pages = data.query?.pages || {};
+  const first = Object.values(pages)[0];
+  const extract = (first?.extract || "").replace(/\s+/g, " ").trim();
+  if (!extract) return "";
+  return extract.length > maxChars ? `${extract.slice(0, maxChars).trim()}…` : extract;
+}
+
+/**
  * Fetch a rendered article, return its HTML plus the list of body links that
  * count as valid hops (article namespace, no chrome / citations / files).
  */

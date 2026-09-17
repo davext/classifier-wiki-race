@@ -191,6 +191,20 @@ a:hover {
   font-size: 22px;
   padding-bottom: 10px;
 }
+.steps-field {
+  flex: 0 0 170px;
+  min-width: 150px;
+}
+.steps-field label {
+  color: var(--text);
+}
+.steps-field input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  height: 22px;
+}
 .buttons {
   display: flex;
   gap: 8px;
