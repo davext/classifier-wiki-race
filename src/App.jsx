@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Header from "./components/Header.jsx";
 import Controls from "./components/Controls.jsx";
 import BrowserPane from "./components/BrowserPane.jsx";
@@ -21,8 +21,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export default function App() {
   const [apiKey, setApiKey] = useState("");
-  const [start, setStart] = useState("Apple Inc.");
-  const [dest, setDest] = useState("Sulla");
+  const [start, setStart] = useState("");
+  const [dest, setDest] = useState("");
   const [maxSteps, setMaxSteps] = useState(DEFAULT_STEPS);
 
   const [phase, setPhase] = useState("idle"); // idle | running | won | stuck | stopped | error
@@ -85,6 +85,15 @@ export default function App() {
       setDestBusy(false);
     }
   }, []);
+
+  // Seed a fresh, guaranteed-connected random matchup on every page load, so
+  // the app opens on something new instead of a fixed default.
+  const didSeed = useRef(false);
+  useEffect(() => {
+    if (didSeed.current) return;
+    didSeed.current = true;
+    randomizeBoth();
+  }, [randomizeBoth]);
 
   const stop = useCallback(() => {
     stopRef.current = true;
